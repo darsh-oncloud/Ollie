@@ -4,7 +4,7 @@
  */
 define(['N/search', 'N/file', 'N/record', 'N/https', 'N/log'], function (search, file, record, https, log) {
 
-    var CELIGO_TOKEN = 'PASTE_YOUR_TOKEN_HERE';
+    var CELIGO_TOKEN = 'c5925a41e3f04375961bd526d1125d54';
     var FLOW_ID = '6862d38aa2817b33330ea03f';
     var STEP_ID = '6862d383b5e58e8daab962dc';
 
