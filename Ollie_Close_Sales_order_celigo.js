@@ -4,7 +4,7 @@
  */
 define(['N/search', 'N/file', 'N/record', 'N/https', 'N/log'], function (search, file, record, https, log) {
 
-    var CELIGO_TOKEN = 'c5925a41e3f04375961bd526d1125d54';
+    var CELIGO_TOKEN = 'PASTE_YOUR_TOKEN_HERE';
     var FLOW_ID = '6862d38aa2817b33330ea03f';
     var STEP_ID = '6862d383b5e58e8daab962dc';
 
@@ -83,7 +83,7 @@ define(['N/search', 'N/file', 'N/record', 'N/https', 'N/log'], function (search,
 
             try {
                 createErrorFile(fileName, jsonData, e);
-                moveFile(fileId, ERROR_FOLDER);
+                deleteFile(fileId);
             } catch (innerErr) {
                 log.error('Error Handling Failed: ' + fileName, innerErr);
             }
@@ -174,7 +174,7 @@ define(['N/search', 'N/file', 'N/record', 'N/https', 'N/log'], function (search,
         log.audit('Resolve Response Code', response.code);
         log.debug('Resolve Response Body', response.body);
 
-        if (String(response.code) !== '200') {
+        if (String(response.code) !== '200' && String(response.code) !== '204') {
             throw new Error('Failed to resolve Celigo error. Code: ' + response.code + ' Body: ' + response.body);
         }
     }
@@ -186,6 +186,13 @@ define(['N/search', 'N/file', 'N/record', 'N/https', 'N/log'], function (search,
         log.audit('File Moved', 'File ID: ' + fileId + ' moved to folder ' + targetFolder);
     }
 
+    function deleteFile(fileId) {
+        file.delete({
+            id: fileId
+        });
+        log.audit('Original File Deleted', fileId);
+    }
+
     function createErrorFile(originalFileName, jsonData, err) {
         var errorObj = {
             originalFileName: originalFileName,
@@ -195,7 +202,7 @@ define(['N/search', 'N/file', 'N/record', 'N/https', 'N/log'], function (search,
         };
 
         var errorFile = file.create({
-            name: originalFileName.replace('.json', '') + '_ERROR.json',
+            name: originalFileName,
             fileType: file.Type.PLAINTEXT,
             contents: JSON.stringify(errorObj, null, 2),
             folder: ERROR_FOLDER,
