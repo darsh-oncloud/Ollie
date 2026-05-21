@@ -21,8 +21,8 @@ function(search, sftp,record, https, url, runtime,encode,log) {
       [
         ["type","anyof","ItemShip"],
         "AND",
-        ["systemnotes.date","within","06/25/2024 12:00 am"],
-        "AND",
+        // ["systemnotes.date","within","06/25/2024 12:00 am"],
+        // "AND",
         ["systemnotes.type","is","T"],
         "AND",
         ["systemnotes.name","anyof","273"], //Integration user only
@@ -33,7 +33,7 @@ function(search, sftp,record, https, url, runtime,encode,log) {
         "AND",
         ["createdfrom.status","anyof","SalesOrd:F"], //Pending Billing
         "AND",
-        ["name","anyof","322186"]//Petco Customer
+        ["name","anyof","322186","322687"]//Petco, Pet Food Customer
       ],
       columns:
       [
