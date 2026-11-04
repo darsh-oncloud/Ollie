@@ -1,26 +1,8 @@
 /**
  * @NApiVersion 2.1
  * @NScriptType UserEventScript
- *
- * Splits a Shopify sales order into one sales order per Pet ID.
- *
- * DISCOUNT SAFETY FIX (hybrid):
- *  - Normal case (99%): line-level discounts from the search add up to the
- *    order's real discount (discounttotal) -> split exactly as before.
- *  - Mismatch case (e.g. 1797070, where the search returned the full order
- *    discount on more than one row): ignore line values and split the real
- *    discount by each order's share of the subtotal.
- *  - Every order's discount is capped at its own subtotal, so no order can be
- *    zeroed out by another pet's discount.
- *  - Amounts are rounded to 2 decimals before comparing.
  */
 define(['N/record', 'N/search', 'N/log'], function (record, search, log) {
-
-  var MATCH_TOLERANCE = 0.05; // dollars
-
-  function round2(n) {
-    return Math.round((Number(n) || 0) * 100) / 100;
-  }
 
   function afterSubmit(context) {
     try {
@@ -59,7 +41,7 @@ define(['N/record', 'N/search', 'N/log'], function (record, search, log) {
         var discount = results[i].getValue("discountamount");
 
         var cleanDiscount = (discount || '').replace(/[()]/g, '');
-        totalOriginalDiscount += Math.abs(parseFloat(cleanDiscount) || 0);
+        totalOriginalDiscount += parseFloat(cleanDiscount) || 0;
 
         if (!petId) continue;
 
@@ -77,7 +59,11 @@ define(['N/record', 'N/search', 'N/log'], function (record, search, log) {
         }
         petIdMap[petId].push(lineData);
       }
-      totalOriginalDiscount = round2(totalOriginalDiscount);
+
+      log.audit('Total Sales Order Summary', {
+        totalLines: results.length,
+        totalOriginalDiscount: totalOriginalDiscount
+      });
 
       var petIds = Object.keys(petIdMap);
       if (petIds.length <= 1) {
@@ -87,25 +73,6 @@ define(['N/record', 'N/search', 'N/log'], function (record, search, log) {
 
       var keepPetId = petIds[0];
       var removePetIds = petIds.slice(1);
-
-      // === 2. NEW: Compare line discounts with the order's real discount ===
-      var origRec = record.load({ type: 'salesorder', id: soId });
-      var headerDiscount = round2(Math.abs(parseFloat(origRec.getValue('discounttotal')) || 0));
-      var origSubtotal = round2(origRec.getValue('subtotal'));
-      var useLineDiscounts = Math.abs(totalOriginalDiscount - headerDiscount) <= MATCH_TOLERANCE;
-
-      log.audit('Total Sales Order Summary', {
-        totalLines: results.length,
-        lineDiscountSum: totalOriginalDiscount,
-        headerDiscount: headerDiscount,
-        originalSubtotal: origSubtotal,
-        mode: useLineDiscounts ? 'LINE (same as before)' : 'PROPORTIONAL (line discounts did not match)'
-      });
-
-      if (!useLineDiscounts) {
-        // Line values are unreliable for this order; use the real discount instead
-        totalOriginalDiscount = headerDiscount;
-      }
 
       log.audit('Pet ID Group Count', {
         totalPetIDs: petIds.length,
@@ -117,8 +84,8 @@ define(['N/record', 'N/search', 'N/log'], function (record, search, log) {
       var totalSplitCount = 0;
       var totalDiscountAppliedToNewSOs = 0;
 
-      // Base doc number (strip trailing ".N" if present)
-      var baseTranId = String(context.newRecord.getValue('tranid') || '').replace(/\.\d+$/, '');
+      // === NEW: Base doc number (strip trailing ".N" if present) ===
+      var baseTranId = String(context.newRecord.getValue('tranid') || '').replace(/\.\d+$/, '');      
 
       // === 3. Create new SOs for other Pet IDs ===
       for (var p = 1; p < petIds.length; p++) {
@@ -135,8 +102,8 @@ define(['N/record', 'N/search', 'N/log'], function (record, search, log) {
 
         var lineCount = newSO.getLineCount('item');
         for (var j = lineCount - 1; j >= 0; j--) {
-          var linePetId = newSO.getSublistValue({ sublistId: 'item', fieldId: 'custcol_ollie_pet_id', line: j });
-          if (linePetId !== currPetId) {
+          var petId = newSO.getSublistValue({ sublistId: 'item', fieldId: 'custcol_ollie_pet_id', line: j });
+          if (petId !== currPetId) {
             newSO.removeLine({ sublistId: 'item', line: j });
           }
         }
@@ -146,52 +113,41 @@ define(['N/record', 'N/search', 'N/log'], function (record, search, log) {
           continue;
         }
 
-        var childSubtotal = round2(newSO.getValue('subtotal'));
-
         // Calculate discount to apply to this SO
         var totalDiscountForSO = 0;
-        if (useLineDiscounts) {
-          for (var d = 0; d < lines.length; d++) {
-            totalDiscountForSO += Math.abs(parseFloat(lines[d].discount || 0));
-          }
-        } else if (origSubtotal > 0) {
-          totalDiscountForSO = totalOriginalDiscount * childSubtotal / origSubtotal;
+        for (var d = 0; d < lines.length; d++) {
+          totalDiscountForSO += parseFloat(lines[d].discount || 0);
         }
-        totalDiscountForSO = Math.min(round2(totalDiscountForSO), childSubtotal); // NEW: cap
 
-        if (totalDiscountForSO > 0) {
-          newSO.setValue({ fieldId: 'discountrate', value: -totalDiscountForSO });
+        if (totalDiscountForSO !== 0) {
+          newSO.setValue({ fieldId: 'discountrate', value: -Math.abs(totalDiscountForSO) });
         } else {
           newSO.setValue({ fieldId: 'discountrate', value: '' });
           newSO.setValue({ fieldId: 'discountitem', value: '' });
         }
 
-        log.audit('Split SO Discount', {
-          petId: currPetId,
-          childSubtotal: childSubtotal,
-          childDiscount: totalDiscountForSO
-        });
-
         newSO.setValue({ fieldId: 'custbody_ollie_created_from', value: soId });
         newSO.setValue({ fieldId: 'custbody_ds_warehouse_order', value: 1 });
         newSO.setValue({ fieldId: 'custbody_ue_sent_to_paccurate', value: true });
 
+        // ✅ Set order status from original
         if (orderStatus) {
           newSO.setValue({ fieldId: 'orderstatus', value: orderStatus });
         }
 
-        // Set custom tranid BEFORE save (Base.p)
+        // === NEW: Set custom tranid BEFORE save (Base.p) ===
         var newTranId = baseTranId + '.' + p;
         try {
           newSO.setValue({ fieldId: 'tranid', value: newTranId });
         } catch (preIdErr) {
           log.debug('Pre-save tranid set skipped', preIdErr);
         }
+                
 
         var newId = newSO.save({ ignoreMandatoryFields: true });
         log.audit('Created New SO for Pet ID: ' + currPetId, 'New SO ID: ' + newId);
 
-        // Post-save fallback to enforce tranid
+                // === NEW: Post-save fallback to enforce tranid ===
         try {
           record.submitFields({
             type: 'salesorder',
@@ -202,37 +158,35 @@ define(['N/record', 'N/search', 'N/log'], function (record, search, log) {
         } catch (postIdErr) {
           log.debug('Post-save tranid override failed (Allow Override may be off)', postIdErr);
         }
+        
 
         // Load saved SO and read discountrate (to avoid mismatch)
         var savedSO = record.load({ type: 'salesorder', id: newId });
         var appliedDiscount = parseFloat(savedSO.getValue('discountrate')) || 0;
-        totalDiscountAppliedToNewSOs = round2(totalDiscountAppliedToNewSOs + Math.abs(appliedDiscount));
+        totalDiscountAppliedToNewSOs += Math.abs(appliedDiscount);
 
         totalSplitCount++;
       }
 
       // === 4. Update original SO with remaining discount ===
+      var finalDiscountOnOriginal = totalOriginalDiscount - totalDiscountAppliedToNewSOs;
+
       var original = record.load({ type: 'salesorder', id: soId, isDynamic: true });
-      for (var k = original.getLineCount('item') - 1; k >= 0; k--) {
-        var origLinePetId = original.getSublistValue({ sublistId: 'item', fieldId: 'custcol_ollie_pet_id', line: k });
-        if (removePetIds.indexOf(origLinePetId) !== -1) {
-          original.removeLine({ sublistId: 'item', line: k });
+      for (var i = original.getLineCount('item') - 1; i >= 0; i--) {
+        var petId = original.getSublistValue({ sublistId: 'item', fieldId: 'custcol_ollie_pet_id', line: i });
+        if (removePetIds.includes(petId)) {
+          original.removeLine({ sublistId: 'item', line: i });
         }
       }
-
-      var remainingSubtotal = round2(original.getValue('subtotal'));
-      var finalDiscountOnOriginal = round2(totalOriginalDiscount - totalDiscountAppliedToNewSOs);
-      finalDiscountOnOriginal = Math.max(0, Math.min(finalDiscountOnOriginal, remainingSubtotal)); // NEW: cap
 
       log.audit('Original SO Update Summary', {
         totalOriginalDiscount: totalOriginalDiscount,
         discountAppliedToNewSOs: totalDiscountAppliedToNewSOs,
-        remainingSubtotal: remainingSubtotal,
         finalDiscountOnOriginal: finalDiscountOnOriginal
       });
 
-      if (finalDiscountOnOriginal > 0) {
-        original.setValue({ fieldId: 'discountrate', value: -finalDiscountOnOriginal });
+      if (finalDiscountOnOriginal !== 0) {
+        original.setValue({ fieldId: 'discountrate', value: -Math.abs(finalDiscountOnOriginal) });
       } else {
         original.setValue({ fieldId: 'discountrate', value: '' });
         original.setValue({ fieldId: 'discountitem', value: '' });
