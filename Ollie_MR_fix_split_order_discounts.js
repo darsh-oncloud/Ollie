@@ -31,16 +31,22 @@ define(['N/search', 'N/record', 'N/runtime', 'N/log'], function (search, record,
     return Math.round((Number(n) || 0) * 100) / 100;
   }
 
+  // function getParams() {
+  //   var script = runtime.getCurrentScript();
+  //   var dryRunParam = script.getParameter({ name: 'custscript_ollie_dsf_dry_run' });
+  //   var daysBack = parseInt(script.getParameter({ name: 'custscript_ollie_dsf_days_back' }), 10);
+  //   return {
+  //     // default to dry run unless the box is explicitly unchecked
+  //     dryRun: dryRunParam === null || dryRunParam === '' || dryRunParam === true || dryRunParam === 'T',
+  //     daysBack: isNaN(daysBack) || daysBack <= 0 ? 60 : daysBack
+  //   };
+  // }
   function getParams() {
-    var script = runtime.getCurrentScript();
-    var dryRunParam = script.getParameter({ name: 'custscript_ollie_dsf_dry_run' });
-    var daysBack = parseInt(script.getParameter({ name: 'custscript_ollie_dsf_days_back' }), 10);
     return {
-      // default to dry run unless the box is explicitly unchecked
-      dryRun: dryRunParam === null || dryRunParam === '' || dryRunParam === true || dryRunParam === 'T',
-      daysBack: isNaN(daysBack) || daysBack <= 0 ? 60 : daysBack
+        dryRun: true,
+        daysBack: 60
     };
-  }
+}
 
   // === 1. Split orders (they carry a link back to the .0 order) ===
   // function getInputData() {
