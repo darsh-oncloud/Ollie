@@ -25,6 +25,7 @@ define(['N/search', 'N/record', 'N/runtime', 'N/log'], function (search, record,
 
   var RATE_TOLERANCE = 0.01;
   var BLOCKED_STATUSES = ['fullyBilled', 'closed', 'cancelled'];
+  var TEST_PARENT_SO_ID = '35855686';
 
   function round2(n) {
     return Math.round((Number(n) || 0) * 100) / 100;
@@ -42,22 +43,46 @@ define(['N/search', 'N/record', 'N/runtime', 'N/log'], function (search, record,
   }
 
   // === 1. Split orders (they carry a link back to the .0 order) ===
-  function getInputData() {
+  // function getInputData() {
+  //   var params = getParams();
+  //   log.audit('Run settings', params);
+
+  //   return search.create({
+  //     type: 'salesorder',
+  //     filters: [
+  //       ['type', 'anyof', 'SalesOrd'],
+  //       'AND', ['mainline', 'is', 'T'],
+  //       'AND', ['custbody_ollie_created_from', 'noneof', '@NONE@'],
+  //       'AND', ['status', 'noneof', 'SalesOrd:G', 'SalesOrd:H', 'SalesOrd:C'], // billed, closed, cancelled
+  //       'AND', ['datecreated', 'onorafter', 'daysago' + params.daysBack]
+  //     ],
+  //     columns: ['internalid', 'custbody_ollie_created_from']
+  //   });
+  // }
+  
+function getInputData() {
+
     var params = getParams();
-    log.audit('Run settings', params);
+
+    log.audit('TEST MODE - Hardcoded Parent SO', {
+        parentSO: TEST_PARENT_SO_ID,
+        dryRun: params.dryRun
+    });
 
     return search.create({
-      type: 'salesorder',
-      filters: [
-        ['type', 'anyof', 'SalesOrd'],
-        'AND', ['mainline', 'is', 'T'],
-        'AND', ['custbody_ollie_created_from', 'noneof', '@NONE@'],
-        'AND', ['status', 'noneof', 'SalesOrd:G', 'SalesOrd:H', 'SalesOrd:C'], // billed, closed, cancelled
-        'AND', ['datecreated', 'onorafter', 'daysago' + params.daysBack]
-      ],
-      columns: ['internalid', 'custbody_ollie_created_from']
+        type: 'salesorder',
+        filters: [
+            ['type', 'anyof', 'SalesOrd'],
+            'AND', ['mainline', 'is', 'T'],
+            'AND', ['custbody_ollie_created_from', 'anyof', TEST_PARENT_SO_ID]
+        ],
+        columns: [
+            'internalid',
+            'custbody_ollie_created_from'
+        ]
     });
-  }
+}
+
 
   // === 2. Group split orders under their .0 order ===
   function map(context) {
