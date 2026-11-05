@@ -16,97 +16,90 @@
  *   4. D is not more than the combined subtotal of the group.
  *   5. No order in the group is billed, closed or cancelled.
  * Any group with a $0 order that doesn't match is logged as NEEDS REVIEW.
- *
- * Script parameters (create these on the script record):
- *   custscript_ollie_dsf_dry_run   Checkbox  (default: checked)  - log only, don't save
- *   custscript_ollie_dsf_days_back Integer   (default: 60)       - only orders created in the last N days
  */
-define(['N/search', 'N/record', 'N/runtime', 'N/log'], function (search, record, runtime, log) {
+define(['N/search', 'N/record', 'N/log'], function (search, record, log) {
 
   var RATE_TOLERANCE = 0.01;
   var BLOCKED_STATUSES = ['fullyBilled', 'closed', 'cancelled'];
-  var TEST_PARENT_SO_ID = '35855686';
 
   function round2(n) {
     return Math.round((Number(n) || 0) * 100) / 100;
   }
 
-  // function getParams() {
-  //   var script = runtime.getCurrentScript();
-  //   var dryRunParam = script.getParameter({ name: 'custscript_ollie_dsf_dry_run' });
-  //   var daysBack = parseInt(script.getParameter({ name: 'custscript_ollie_dsf_days_back' }), 10);
-  //   return {
-  //     // default to dry run unless the box is explicitly unchecked
-  //     dryRun: dryRunParam === null || dryRunParam === '' || dryRunParam === true || dryRunParam === 'T',
-  //     daysBack: isNaN(daysBack) || daysBack <= 0 ? 60 : daysBack
-  //   };
-  // }
-  function getParams() {
-    return {
-        dryRun: false,
-        daysBack: 60
-    };
-}
+  // === 1. Fetch qualifying split orders from Saved Search ===
+  function getInputData() {
 
-  // === 1. Split orders (they carry a link back to the .0 order) ===
-  // function getInputData() {
-  //   var params = getParams();
-  //   log.audit('Run settings', params);
-
-  //   return search.create({
-  //     type: 'salesorder',
-  //     filters: [
-  //       ['type', 'anyof', 'SalesOrd'],
-  //       'AND', ['mainline', 'is', 'T'],
-  //       'AND', ['custbody_ollie_created_from', 'noneof', '@NONE@'],
-  //       'AND', ['status', 'noneof', 'SalesOrd:G', 'SalesOrd:H', 'SalesOrd:C'], // billed, closed, cancelled
-  //       'AND', ['datecreated', 'onorafter', 'daysago' + params.daysBack]
-  //     ],
-  //     columns: ['internalid', 'custbody_ollie_created_from']
-  //   });
-  // }
-  
-function getInputData() {
-
-    var params = getParams();
-
-    log.audit('TEST MODE - Hardcoded Parent SO', {
-        parentSO: TEST_PARENT_SO_ID,
-        dryRun: params.dryRun
-    });
+    log.audit('Start', 'Searching for Sales Orders with duplicated discounts');
 
     return search.create({
-        type: 'salesorder',
-        filters: [
-            ['type', 'anyof', 'SalesOrd'],
-            'AND', ['mainline', 'is', 'T'],
-            'AND', ['custbody_ollie_created_from', 'anyof', TEST_PARENT_SO_ID]
-        ],
-        columns: [
-            'internalid',
-            'custbody_ollie_created_from'
-        ]
+      type: "salesorder",
+      settings: [{ name: "consolidationtype", value: "ACCTTYPE" }],
+      filters: [
+        ["type", "anyof", "SalesOrd"],
+        "AND", ["mainline", "is", "T"],
+        "AND", ["custbody_ollie_created_from", "noneof", "@NONE@"],
+        "AND", ["custbody_ollie_created_from.type", "anyof", "SalesOrd"],
+        "AND", ["custbody_ollie_created_from.totalamount", "equalto", "0.00"],
+        "AND", ["datecreated", "onorafter", "09/01/2026 12:00 am"],
+        "AND", ["custbody_ollie_created_from.custbody_celigo_etail_order_total_var", "notequalto", "0"]
+      ],
+      columns: [
+        "internalid",
+        "tranid",
+        "custbody_celigo_etail_order_id",
+        "custbody_ollie_created_from",
+        search.createColumn({
+          name: "internalid",
+          join: "CUSTBODY_OLLIE_CREATED_FROM"
+        })
+      ]
     });
-}
-
+  }
 
   // === 2. Group split orders under their .0 order ===
   function map(context) {
     var result = JSON.parse(context.value);
     var parentId = result.values.custbody_ollie_created_from &&
       (result.values.custbody_ollie_created_from.value || result.values.custbody_ollie_created_from);
+
     if (!parentId) return;
+
+    log.debug('Parent SO Found', {
+      parentId: parentId,
+      childId: result.id
+    });
+
     context.write({ key: String(parentId), value: String(result.id) });
   }
 
   // === 3. Check and fix each group ===
   function reduce(context) {
-    var params = getParams();
     var parentId = context.key;
 
     var ids = [parentId];
     context.values.forEach(function (v) {
       if (ids.indexOf(v) === -1) ids.push(v);
+    });
+
+    // Fetch all child orders linked to this parent
+    var childSearch = search.create({
+      type: 'salesorder',
+      filters: [
+        ["mainline", "is", "T"],
+        "AND", ["custbody_ollie_created_from", "anyof", parentId]
+      ],
+      columns: ["internalid"]
+    });
+
+    childSearch.run().each(function (result) {
+      var childId = String(result.id);
+      if (ids.indexOf(childId) === -1) ids.push(childId);
+      return true;
+    });
+
+    log.audit('Processing Parent SO', {
+      parentId: parentId,
+      orderIds: ids
     });
 
     // Load the group
@@ -166,10 +159,10 @@ function getInputData() {
       return o.tranid + ': (' + o.rate + ') -> (' + o.newDiscount + '), new total ' + round2(o.subtotal - o.newDiscount);
     });
 
-    if (params.dryRun) {
-      log.audit('DRY RUN - would fix parent SO ' + parentId, { orderDiscount: D, plan: plan });
-      return;
-    }
+    log.audit('Discount Correction Plan - Parent SO ' + parentId, {
+      orderDiscount: D,
+      plan: plan
+    });
 
     // --- Save ---
     orders.forEach(function (o) {
@@ -192,6 +185,10 @@ function getInputData() {
     var fixed = 0;
     summary.output.iterator().each(function () { fixed++; return true; });
 
+    if (summary.inputSummary.error) {
+      log.error('Input Error', summary.inputSummary.error);
+    }
+
     summary.mapSummary.errors.iterator().each(function (key, err) {
       log.error('Map error ' + key, err);
       return true;
@@ -203,7 +200,6 @@ function getInputData() {
 
     log.audit('Run complete', {
       groupsFixed: fixed,
-      dryRun: getParams().dryRun,
       seconds: summary.seconds
     });
   }
