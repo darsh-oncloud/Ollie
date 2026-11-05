@@ -41,7 +41,9 @@ define(['N/search', 'N/record', 'N/log'], function (search, record, log) {
         "AND", ["custbody_ollie_created_from.type", "anyof", "SalesOrd"],
         "AND", ["custbody_ollie_created_from.totalamount", "equalto", "0.00"],
         "AND", ["datecreated", "onorafter", "09/01/2026 12:00 am"],
-        "AND", ["custbody_ollie_created_from.custbody_celigo_etail_order_total_var", "notequalto", "0"]
+        "AND", ["custbody_ollie_created_from.custbody_celigo_etail_order_total_var", "notequalto", "0"],
+        "AND", ["custbody_ollie_created_from.status","noneof","SalesOrd:A","SalesOrd:C","SalesOrd:G","SalesOrd:H"],
+        "AND", ["status","noneof","SalesOrd:A","SalesOrd:C","SalesOrd:G","SalesOrd:H"]
       ],
       columns: [
         "internalid",
